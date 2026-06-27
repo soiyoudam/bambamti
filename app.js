@@ -161,10 +161,44 @@ function renderAdminDashboard() {
     <section class="admin-grid" aria-label="전체 학생 정보">
       ${STUDENTS.map(renderStudentCard).join("")}
     </section>
+    
+    <section id="aiAssistantPanel" class="intro-panel hidden" style="margin-top: 32px; padding: 24px;">
+      <div class="section-title">
+        <h3>AI 학생 상담 전략 도우미</h3>
+      </div>
+      <div>
+        <div style="margin-bottom: 16px;">
+          <h4 style="margin: 0 0 4px 0;">선택된 학생</h4>
+          <p id="aiTargetStudent" style="margin: 0; color: var(--primary); font-weight: 500;">학생을 선택해주세요.</p>
+        </div>
+        
+        <div style="margin-bottom: 16px;">
+          <label for="teacherConcern" style="display: block; margin-bottom: 8px; font-weight: 500;">상담 고민 (직접 입력)</label>
+          <textarea id="teacherConcern" style="width: 100%; height: 80px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; font-family: inherit; resize: vertical;" placeholder="수업 참여는 좋은데 평가 결과가 낮습니다. 어떻게 상담하면 좋을까요?"></textarea>
+        </div>
+        
+        <div style="margin-bottom: 24px;">
+          <h4 style="margin: 0 0 8px 0;">전송 데이터 미리보기 (익명화됨)</h4>
+          <pre id="aiDataPreview" style="background: var(--surface-strong); padding: 16px; border-radius: 8px; font-size: 14px; overflow-x: auto; margin: 0; border: 1px solid var(--line);">{}</pre>
+        </div>
+        
+        <button id="aiRequestBtn" class="primary-button" type="button" style="width: 100%; margin-bottom: 16px;">AI 상담 전략 받기</button>
+        
+        <p id="aiStatusMessage" class="form-message" style="margin-bottom: 16px; font-weight: 500;"></p>
+        
+        <div id="aiResultArea" class="hidden" style="background: #f0fdf4; border: 1px solid #bbf7d0; padding: 20px; border-radius: 12px; margin-bottom: 16px; color: #166534; line-height: 1.6;"></div>
+        
+        <p style="font-size: 13px; color: var(--muted); text-align: center; margin: 0;">
+          AI 상담 전략은 참고용입니다. 최종 판단과 실제 상담은 교사가 학생의 상황을 종합적으로 고려하여 진행해야 합니다.
+        </p>
+      </div>
+    </section>
   `;
 
   showOnly(adminView);
   logoutButton.classList.remove("hidden");
+  
+  setupAIAssistant();
 }
 
 function renderStudentCard(student) {
@@ -176,6 +210,7 @@ function renderStudentCard(student) {
         <p class="student-number">학번 ${student.id}</p>
         ${renderGrades(student.grades, true, `gradesTitle-${student.id}`)}
         ${renderTraits(student)}
+        <button class="ghost-button ai-request-btn" data-student-id="${student.id}" type="button" style="width: 100%; margin-top: 16px;">상담 전략 요청</button>
       </div>
     </article>
   `;
@@ -213,3 +248,99 @@ function renderTraits(student) {
 }
 
 showOnly(loginView);
+
+let selectedStudentForAI = null;
+
+function setupAIAssistant() {
+  const aiAssistantPanel = document.getElementById('aiAssistantPanel');
+  const buttons = document.querySelectorAll('.ai-request-btn');
+  const aiTargetStudent = document.getElementById('aiTargetStudent');
+  const teacherConcern = document.getElementById('teacherConcern');
+  const aiDataPreview = document.getElementById('aiDataPreview');
+  const aiRequestBtn = document.getElementById('aiRequestBtn');
+  const aiStatusMessage = document.getElementById('aiStatusMessage');
+  const aiResultArea = document.getElementById('aiResultArea');
+
+  buttons.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const studentId = e.target.getAttribute('data-student-id');
+      const student = STUDENTS.find(s => s.id === studentId);
+      if (!student) return;
+
+      selectedStudentForAI = student;
+      aiAssistantPanel.classList.remove('hidden');
+      
+      aiTargetStudent.textContent = `${student.name} (학번: ${student.id})`;
+      updatePreview();
+      
+      aiAssistantPanel.scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+
+  teacherConcern.addEventListener('input', updatePreview);
+
+  function updatePreview() {
+    if (!selectedStudentForAI) return null;
+    
+    const studentIndex = STUDENTS.findIndex(s => s.id === selectedStudentForAI.id);
+    const alias = `학생 ${String.fromCharCode(65 + studentIndex)}`;
+    
+    const gradeSummary = Object.entries(selectedStudentForAI.grades).map(([k, v]) => `${k}: ${v}`).join(', ');
+    const learningTraits = selectedStudentForAI.traits.join(', ') + ' / ' + selectedStudentForAI.teacherMemo;
+
+    const previewData = {
+      studentAlias: alias,
+      gradeSummary: gradeSummary,
+      learningTraits: learningTraits,
+      teacherConcern: teacherConcern.value.trim()
+    };
+    
+    aiDataPreview.textContent = JSON.stringify(previewData, null, 2);
+    return previewData;
+  }
+
+  aiRequestBtn.addEventListener('click', async () => {
+    if (!selectedStudentForAI) return;
+    
+    if (teacherConcern.value.trim() === '') {
+      aiStatusMessage.textContent = '상담 고민을 먼저 입력해주세요.';
+      aiStatusMessage.style.color = 'var(--danger)';
+      return;
+    }
+
+    const requestData = updatePreview();
+
+    aiStatusMessage.textContent = 'AI가 상담 전략을 생성하는 중입니다...';
+    aiStatusMessage.style.color = 'var(--primary)';
+    aiResultArea.classList.add('hidden');
+    aiRequestBtn.disabled = true;
+
+    try {
+      const response = await fetch('/api/gemini-counseling', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestData)
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        aiStatusMessage.textContent = '';
+        aiResultArea.innerHTML = `<div style="white-space: pre-wrap;">${data.result}</div>`;
+        aiResultArea.classList.remove('hidden');
+      } else {
+        aiStatusMessage.textContent = 'AI 상담 전략을 불러오지 못했습니다. API 키 또는 Vercel 환경 변수를 확인해주세요.';
+        aiStatusMessage.style.color = 'var(--danger)';
+        console.error(data.error);
+      }
+    } catch (error) {
+      aiStatusMessage.textContent = 'AI 상담 전략을 불러오지 못했습니다. API 키 또는 Vercel 환경 변수를 확인해주세요.';
+      aiStatusMessage.style.color = 'var(--danger)';
+      console.error(error);
+    } finally {
+      aiRequestBtn.disabled = false;
+    }
+  });
+}
